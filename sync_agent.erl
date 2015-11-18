@@ -2,6 +2,7 @@
 
 -export([start/0]).
 
+% ask cluster lookfor image
 find_image(ImageID) ->
   rpc:abcast(nodes(), docker_image_service, {find_image, self(), ImageID}),
   receive
@@ -11,10 +12,33 @@ find_image(ImageID) ->
     timeout
   end.
 
+lookfor_service() ->
+  receive
+    {find_image, Pid, ImageID} ->
+      if
+        endlists:last(os:cmd("docker inspect " ++ ImageID ++ " && echo 1")) :=: ?1 ->
+          Pid ! {found, node(), ImageID};
+        true ->
+          io:format("not found image: ~s on ~s", [ImageID, node()])
+      end
+  end.
+
+% send image
 transfer_image(FromNode, ImageID) ->
   Temp = string:strip(os:cmd("mktemp"), right, $\n),
+  if
+    endlists:last(os:cmd("docker save -o " ++ Temp ++ " " ++ ImageID ++ " && echo 1")) :=: ?1 ->
+      {ok, IoDevice} = file:open(Temp, read),
+      transfer_image_in_trunk(FromNode, ImageID, IoDevice),
+      ok = file:close(Temp);
+    true ->
+      io:format("save image: ~s at ~s failed", [ImageID, node()])
+  end
+
+transfer_image_in_trunk(FromNode, ImageID, IoDevice) ->
 
 
+% receive image from node
 receive_image_service(Node, ImageID) ->
   receive
     {transfer_image, Node, ImageID, Trunk} ->
@@ -27,6 +51,7 @@ receive_image_service(Node, ImageID) ->
   end,
   receive_image_service(Node, ImageID).
 
+% download image from node
 download_image(Node, ImageID) ->
   Pid = spawn(?MODULE, receive_image_service, [Node, ImageID]),
   ok = rpc:call(Node, sync_agent, transfer_image, {node(), ImageID}).
@@ -34,9 +59,7 @@ download_image(Node, ImageID) ->
 pull_image(ImageID) ->
   case find_image(ImageID) of
     [found, From, ImageID] ->
-      ...
+      download_image(From, ImageID)
     timeout ->
       io:format("image not found")
   end
-
-handle_call({find_image, ImageID}, From, Tab) ->
