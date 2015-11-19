@@ -9,8 +9,9 @@ find_image(ImageID) ->
   rpc:abcast(nodes(), docker_image_service, {find_image, self(), ImageID}),
   receive
     {found, From, ImageID} ->
-      {From, ImageID}
+      {found, From, ImageID}
   after 2000 ->
+    io:format("wait timeout...."),
     timeout
   end.
 
@@ -19,13 +20,15 @@ lookfor_service() ->
     {find_image, Pid, ImageID} ->
       DockerInspect = string:strip(os:cmd("docker inspect " ++ ImageID ++ " && echo 1"), right, $\n),
       Result = lists:last(DockerInspect),
+      % io:format("Result is ~s", [1]),
       if
         Result =:= $1 ->
           Pid ! {found, node(), ImageID};
         true ->
           io:format("not found image: ~s on ~s", [ImageID, node()])
       end
-  end.
+  end,
+  lookfor_service().
 
 % send image
 transfer_image(FromNode, ImageID) ->
@@ -71,11 +74,11 @@ receive_image_service(Node, ImageID) ->
 % download image from node
 download_image(Node, ImageID) ->
   Pid = spawn(?MODULE, receive_image_service, [Node, ImageID]),
-  ok = rpc:call(Node, sync_agent, transfer_image, {node(), ImageID}).
+  ok = rpc:call(Node, sync_agent, transfer_image, [node(), ImageID]).
 
 pull_image(ImageID) ->
   case find_image(ImageID) of
-    [found, From, ImageID] ->
+      {found, From, ImageID} ->
       download_image(From, ImageID);
     timeout ->
       io:format("image not found ~n"),
