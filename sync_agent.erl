@@ -8,15 +8,16 @@ find_image(ImageID) ->
   receive
     {found, From, ImageID} ->
       {From, ImageID}
-  after 3
+  after 3 ->
     timeout
   end.
 
 lookfor_service() ->
   receive
     {find_image, Pid, ImageID} ->
+      DockerInspect = string:strip(os:cmd("docker inspect " ++ ImageID ++ " && echo 1"), right, $\n),
       if
-        endlists:last(os:cmd("docker inspect " ++ ImageID ++ " && echo 1")) :=: ?1 ->
+        lists:last(DockerInspect) =:= $1 ->
           Pid ! {found, node(), ImageID};
         true ->
           io:format("not found image: ~s on ~s", [ImageID, node()])
@@ -26,14 +27,15 @@ lookfor_service() ->
 % send image
 transfer_image(FromNode, ImageID) ->
   Temp = string:strip(os:cmd("mktemp"), right, $\n),
+  DockerSave = string:strip(os:cmd("docker save -o " ++ Temp ++ " " ++ ImageID ++ " && echo 1"), right, $\n),
   if
-    endlists:last(os:cmd("docker save -o " ++ Temp ++ " " ++ ImageID ++ " && echo 1")) :=: ?1 ->
+    lists:last(DockerSave) =:= $1 ->
       {ok, IoDevice} = file:open(Temp, read),
       transfer_image_in_trunk(FromNode, ImageID, IoDevice),
       ok = file:close(Temp);
     true ->
       io:format("save image: ~s at ~s failed", [ImageID, node()])
-  end
+  end.
 
 transfer_image_in_trunk(FromNode, ImageID, IoDevice) ->
 
