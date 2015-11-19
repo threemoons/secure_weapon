@@ -27,8 +27,8 @@ lookfor_service() ->
         true ->
           io:format("not found image: ~s on ~s", [ImageID, node()])
       end
-  end,
-  lookfor_service().
+  end.
+  %lookfor_service().
 
 % send image
 transfer_image(FromNode, ImageID) ->
@@ -39,7 +39,7 @@ transfer_image(FromNode, ImageID) ->
     Result =:= $1 ->
       {ok, IoDevice} = file:open(Temp, read),
       transfer_image_in_trunk(FromNode, ImageID, IoDevice),
-      ok = file:close(Temp);
+      ok = file:close(IoDevice);
     true ->
       io:format("save image: ~s at ~s failed", [ImageID, node()])
   end.
@@ -47,33 +47,33 @@ transfer_image(FromNode, ImageID) ->
 transfer_image_in_trunk(FromNode, ImageID, IoDevice) ->
   case file:read(IoDevice, 4096) of
     {ok, Data} ->
-      rpc:cast(FromNode, sync_agent, receive_image_service, {transfer_image, node(), ImageID, Data});
+      rpc:abcast([FromNode], receive_image_service, {transfer_image, node(), ImageID, Data});
     eof ->
-      rpc:cast(FromNode, sync_agent, receive_image_service, {done, node(), ImageID});
+      rpc:abcast([FromNode], receive_image_service, {done, node(), ImageID});
     {error, Reason} ->
       io:format("transfer image error: ~s", [Reason]),
-      rpc:cast(FromNode, sync_agent, receive_image_service, {error, node(), ImageID, Reason})
-  end.
+      rpc:abcast([FromNode], receive_image_service, {error, node(), ImageID, Reason})
+  end,
+  transfer_image_in_trunk(FromNode, ImageID, IoDevice).
 
 
 % receive image from node
 receive_image_service(Node, ImageID) ->
+  io:format("start receive ~p from ~p", [ImageID, Node]),
   receive
     {transfer_image, Node, ImageID, Trunk} ->
       % save Trunk
-      io:format("receive ~s bytes ~s from ~s complete", [length(Trunk), ImageID, Node]),
+      io:format("receive ~p bytes ~s from ~s complete", [length(Trunk), ImageID, Node]),
       receive_image_service(Node, ImageID);
     {done, Node, ImageID} ->
       io:format("done: receive ~s from ~s complete", [ImageID, Node]);
     {error, Node, ImageID, Reason} ->
       error(io_lib:format("error: receive ~s from ~s failed, ~s", [ImageID, Node, Reason]))
-  after 180000 ->
-    error(io_lib:format("error: receive ~s from ~s timeout", [ImageID, Node]))
   end.
 
 % download image from node
 download_image(Node, ImageID) ->
-  Pid = spawn(?MODULE, receive_image_service, [Node, ImageID]),
+  register(receive_image_service, spawn(?MODULE, receive_image_service, [Node, ImageID])),
   ok = rpc:call(Node, sync_agent, transfer_image, [node(), ImageID]).
 
 pull_image(ImageID) ->
