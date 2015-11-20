@@ -47,39 +47,45 @@ transfer_image(FromNode, ImageID) ->
 transfer_image_in_trunk(FromNode, ImageID, IoDevice) ->
   case file:read(IoDevice, 4096) of
     {ok, Data} ->
+      transfer_image_in_trunk(FromNode, ImageID, IoDevice),
       rpc:abcast([FromNode], receive_image_service, {transfer_image, node(), ImageID, Data});
     eof ->
       rpc:abcast([FromNode], receive_image_service, {done, node(), ImageID});
     {error, Reason} ->
       io:format("transfer image error: ~s", [Reason]),
       rpc:abcast([FromNode], receive_image_service, {error, node(), ImageID, Reason})
-  end,
-  transfer_image_in_trunk(FromNode, ImageID, IoDevice).
+  end.
 
 
 % receive image from node
-receive_image_service(Node, ImageID) ->
+receive_image_service(Node, ImageID, IoDevice) ->
   io:format("start receive ~p from ~p", [ImageID, Node]),
   receive
     {transfer_image, Node, ImageID, Trunk} ->
       % save Trunk
+      file:write(IoDevice, Trunk),
       io:format("receive ~p bytes ~s from ~s complete", [length(Trunk), ImageID, Node]),
-      receive_image_service(Node, ImageID);
+      receive_image_service(Node, ImageID, IoDevice);
     {done, Node, ImageID} ->
-      io:format("done: receive ~s from ~s complete", [ImageID, Node]);
+      io:format("done: receive ~s from ~s complete", [ImageID, Node]),
+      file:close(IoDevice);
     {error, Node, ImageID, Reason} ->
       error(io_lib:format("error: receive ~s from ~s failed, ~s", [ImageID, Node, Reason]))
   end.
 
 % download image from node
-download_image(Node, ImageID) ->
-  register(receive_image_service, spawn(?MODULE, receive_image_service, [Node, ImageID])),
+download_image(Node, ImageID, FilePath) ->
+  {ok, IoDevice} = file:open(FilePath, write),
+  register(receive_image_service, spawn(?MODULE, receive_image_service, [Node, ImageID, IoDevice])),
   ok = rpc:call(Node, sync_agent, transfer_image, [node(), ImageID]).
 
 pull_image(ImageID) ->
   case find_image(ImageID) of
       {found, From, ImageID} ->
-      download_image(From, ImageID);
+        Temp = string:strip(os:cmd("mktemp"), right, $\n),
+        download_image(From, ImageID, Temp),
+        DockerLoad = os:cmd("docker load -i " ++ Temp),
+        io:format("Docker ~s", [DockerLoad]);
     timeout ->
       io:format("image not found ~n"),
       notfound
